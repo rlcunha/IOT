@@ -1,17 +1,30 @@
 // --- WIFI ----
 #include <ESP8266WiFi.h>
+
+// --- WIFIMANAGER ----
+//needed for library wifimanager
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WiFiManager.h>
+
+// --- MQTT ----
 #include <PubSubClient.h>
+
+#define DEBUG
+
 const char* ssid = "risagami2G";
 const char* password = "cesabe01";
 
 WiFiClient mibiIotClient;
 PubSubClient client(mibiIotClient);
 
-const char* mqtt_broker = "mqtt.eclipseprojects.io";
-const char* topicTemperatura = "mibitech/temperatura";
-const char* topicUmidade = "mibitech/umidade";
-// Create a random client ID
-const char* clientIdMqtt = "mibi-tech-smarthome-temperatura";
+//informações do broker MQTT - Verifique as informações geradas pelo CloudMQTT
+const char* mqttServer = "driver.cloudmqtt.com";
+const char* mqttUser = "ohcqhlgs";              //user
+const char* mqttPassword = "rV_EeIl0XIaw";      //password
+const int mqttPort = 18686;                     //port
+const char* mqttTopicSubTemp = "mibitech/temperatura";
+const char* mqttTopicSubUmi = "mibitech/umidade";
 
 #include <DHT.h>
 #define DHTPIN D3
@@ -43,9 +56,22 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 // --------------------------------------------------- //
 void setup() {
   Serial.begin(115200);
-  configurarDisplay();
+
+  //WiFiManager
+  WiFiManager wifiManager;
+
+  //wifiManager.resetSettings();
+  
+  wifiManager.autoConnect("AutoConnectAP");
+  Serial.println("wifimanager connected...yeey :)");
+  
   conectarWifi();
-  client.setServer(mqtt_broker,1883);
+
+  //MQTT
+  client.setServer(mqttServer,mqttPort);
+  client.setCallback(callback);
+
+  configurarDisplay();
 }
 // --------------------------------------------------- //
 // --- Loop ---
@@ -79,33 +105,42 @@ void conectarWifi(){
 
 // --- reconecar ao Cliente MQTT
 void reconectarMqtt(){
+  //Enquanto estiver desconectado
   while (!client.connected()) {
-    // Attempt to connect
-    if (client.connect(clientIdMqtt)) {
-      Serial.println("connected");
-//      // Once connected, publish an announcement...
-//      client.publish("outTopic", "hello world");
-//      // ... and resubscribe
-//      client.subscribe("inTopic");
-    } 
-//    else {
-//      Serial.print("failed, rc=");
-//      Serial.print(client.state());
-//      Serial.println(" try again in 5 seconds");
-//      // Wait 5 seconds before retrying
-//      delay(5000);
-//    }
-
+    #ifdef DEBUG
+    Serial.print("Tentando conectar ao servidor MQTT");
+    #endif
+     
+    bool conectado = strlen(mqttUser) > 0 ?
+                     client.connect("ESP8266Client", mqttUser, mqttPassword) :
+                     client.connect("ESP8266Client");
+ 
+    if(conectado) {
+      #ifdef DEBUG
+      Serial.println("Conectado!");
+      #endif
+      //subscreve no tópico
+      client.subscribe(mqttTopicSubTemp, 1); //nivel de qualidade: QoS 1
+      client.subscribe(mqttTopicSubUmi, 1); //nivel de qualidade: QoS 1
+    } else {
+      #ifdef DEBUG
+      Serial.println("Falha durante a conexão.Code: ");
+      Serial.println( String(client.state()).c_str());
+      Serial.println("Tentando novamente em 10 s");
+      #endif
+      //Aguarda 10 segundos 
+      delay(10000);
+    }
   }
 }
 
 // --- Publica (MQTT) Temperatura / Umidade
 void publicarTemperaturaUmidadeTopico(){
   if(temperatura<200){
-    client.publish(topicTemperatura, String(temperatura).c_str(), true);        
+    client.publish(mqttTopicSubTemp, String(temperatura).c_str(), true);        
   }
   if(umidade<200){
-    client.publish(topicUmidade, String(umidade).c_str(), true);        
+    client.publish(mqttTopicSubUmi, String(umidade).c_str(), true);        
   }
 }
 
@@ -128,12 +163,12 @@ void configurarDisplay(){
 void mostrarTemperaturaUnidade(){
   umidade = dht.readHumidity();
   temperatura = dht.readTemperature(false); 
-  medirDados("TEMPERATURA",(temperatura), " C");
-  medirDados("UMIDADE",(umidade)," %");
+  exibirDadosDisplay("TEMPERATURA",(temperatura), " C");
+  exibirDadosDisplay("UMIDADE",(umidade)," %");
 }
 
 /// --- Medição de temperatura e umidade
-void medirDados(const char* texto1, int medicao, const char* texto2){
+void exibirDadosDisplay(const char* texto1, int medicao, const char* texto2){
   if(medicao < 200){
     display.clearDisplay();
   
@@ -155,3 +190,29 @@ void medirDados(const char* texto1, int medicao, const char* texto2){
     delay(2000);
   }
 }
+
+void callback(char* topic, byte* payload, unsigned int length) {
+ 
+  //armazena msg recebida em uma sring
+  payload[length] = '\0';
+  String strMSG = String((char*)payload);
+ 
+  #ifdef DEBUG
+  Serial.print("Mensagem chegou do tópico: ");
+  Serial.println(topic);
+  Serial.print("Mensagem:");
+  Serial.print(strMSG);
+  Serial.println();
+  Serial.println("-----------------------");
+  #endif
+ 
+  //aciona saída conforme msg recebida 
+  if (strMSG == "1"){         //se msg "1"
+    Serial.print("Mensagem:");
+     //digitalWrite(L1, LOW);  //coloca saída em LOW para ligar a Lampada - > o módulo RELE usado tem acionamento invertido. Se necessário ajuste para o seu modulo
+  }else if (strMSG == "0"){   //se msg "0"
+    Serial.print("Mensagem: 0");
+     //digitalWrite(L1, HIGH);   //coloca saída em HIGH para desligar a Lampada - > o módulo RELE usado tem acionamento invertido. Se necessário ajuste para o seu modulo
+  }
+}
+ 
